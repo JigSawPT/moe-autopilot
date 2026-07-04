@@ -341,16 +341,21 @@ alone, and it is the design that the V3 roadmap item picks up (see below).
   size, and investigate managing the copies around large-batch prefill (freeing or
   right-sizing them for prompt-heavy workloads) so arming the split stops being a
   prompt-shape gamble.
-- **V3 — true async overlap of the cold expert chain.** The negative result above pins
-  the remaining route: a bespoke single-graph split executor that runs the cold split on
-  a persistent worker and gates the merge with a CPU-completion → `cudaStreamWaitEvent`
-  bridge, issuing CUDA work in dependency order (no marker, no extra split boundary, so
-  no 41 µs tax). The full design — spike ladder, kill criteria, thread-safety and
-  exactness plan — is in [docs/15_v3_overlap_design.md](docs/15_v3_overlap_design.md).
-  Modeled target: lift the incumbent from ~91 toward ~100–104 tok/s on
-  dispatch-floor-dominated MoEs. It is a **latency-hiding** optimization, so it is
-  neutral (single-digit %) for purely RAM-bandwidth-bound configs — it ships with a
-  serial fallback so it does no harm where it cannot help.
+- **V3 — true async overlap of the cold expert chain: investigated end-to-end and
+  closed as a measured negative on Windows.** The bespoke single-graph split executor
+  described in [docs/15_v3_overlap_design.md](docs/15_v3_overlap_design.md) was built and
+  spike-tested through three stages: the bare fork/join glue passed its own kill
+  criterion with a large margin (~11 µs/layer vs a 20 µs bar), proving the earlier
+  scheduler-marker tax was an artifact, not fundamental — but wiring it into one real
+  offloaded layer broke CUDA-graph capture on the merge region, and a follow-up spike
+  building two different capture-preserving wait gates found that **every in-graph wait
+  node pays a ~23-29 µs WDDM submission-split tax that cancels the ~96 µs/layer overlap
+  saving**, regardless of which of the three independent mechanisms carries it. Net
+  effect: −3 tok/s on the incumbent, consistently, across all three. Full design +
+  spike-by-spike evidence in docs/15. The mechanism is plausibly viable on native Linux
+  (the same wait op is architecturally expected to be sub-µs there) — **this is an
+  untested hypothesis**, not a claim; a Windows-hosted Linux compatibility layer would
+  not qualify as a test, since its CUDA path still crosses the host WDDM driver.
 
 ---
 

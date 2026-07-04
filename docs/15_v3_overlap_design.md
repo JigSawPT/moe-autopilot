@@ -231,3 +231,36 @@ Reviewed every measured fact against the code; **no contradiction found.** The c
 - **Effort ladder:** Spike 1 (1–2 d, kill >20 µs/layer) → Spike 2 (1–2 wk, kill if slower than serial or any temp-0 divergence) → Spike 3 (1–2 wk, continue ≥97 tok/s, target ~100–104) → Spike 4 (1 wk, productionize + 35B + ultracode review before commit). **≈4–7 weeks fully, but dies cheaply at day 2 if the primitive is too heavy.**
 - **Exactness:** identical graph and math; gate = temp-0 output byte-identity (overlap-off vs overlap-on) via `run_ab.ps1`; one active caveat (cold-pool thread-count vs reduction order) verified in Spike 2.
 - **Honest scope:** a *latency-hiding* win for dispatch-floor-dominated MoEs (incumbent 91→~103); *single-digit %* and "measure, don't oversell" for RAM-bandwidth-bound MoEs (gpt-oss-120b). Ships opt-in with a serial fallback so it does no harm where it can't help.
+
+---
+
+## V3 FINAL OUTCOME: closed as a measured negative on Windows
+
+The spike ladder below ran to completion and the program closed as a **measured negative** on this Windows machine. Full spike-by-spike evidence is available on request (see the repo's evidence index); the summary here carries every number that backs the claim.
+
+### The spike ladder
+
+| Spike | What it tested | Result |
+|---|---|---|
+| **1 — bare fork/join microbenchmark** | Was the earlier scheduler-marker tax (~41 µs/pair) a `ggml_backend_sched` artifact, or fundamental to any overlap? | **PASS.** Pure-glue floor (event gate): 6.44/6.45 µs — 3.1× under the 20 µs kill bar. Realistic fork/join (cold≈180 µs ‖ hot≈112 µs): **~11–12 µs/layer** glue (event gate: 11.62/10.93 µs; a `cudaLaunchHostFunc` bridge gate: 7.91/7.61 µs), both comfortably under the kill bar. CCD-pinning the cold-worker pool fully mitigated the busy-poll contention (cold-alone stayed ~180 µs under 16-thread contention, matching the uncontended case). **Confirms the earlier tax was a scheduler split-boundary artifact, not a fundamental overlap cost** — bespoke fork/join is ~9× cheaper.
+| **2 — single-layer prototype** | Does the bespoke executor (cold split on a persistent pinned worker, CUDA splits issued in dependency order, host-spin merge gate) net-win on one real offloaded layer? | **Mechanism proven, net negative.** Exactness byte-identical; graph split count unchanged (no scheduler re-cut, no split-boundary tax). Overlap is real (hot-chain issue ~8 µs async; cold overlaps during the ~130-187 µs wait) but the designated layer measured **342 µs (median) vs 302 µs for a serial neighbor — ~40 µs SLOWER.** Root cause: splitting the atomic 133-node CUDA region to insert the host-spin gate **breaks CUDA-graph capture** on the merge sub-region — the merge issue stayed an un-captured/eager 30–45 µs instead of the ~5 µs graph-replay class. Whole-model A/B: **~−3 tok/s** (range −2.7…−4.4 across 3 run sets).
+| **2b — capture-preserving cold→merge gate** | Can the 133-node region be kept as ONE captured/replayed graph while its merge sub-region waits, in-graph, on cold-worker completion? Two gates built: (A) a captured stream mem-op wait (`cuStreamWaitValue32`); (B) a captured host-callback wait (`cudaLaunchHostFunc`). | **Both capturable and exactness-perfect, both still net negative.** Both gates record as legal capturable graph nodes, instantiate, and truly gate (verified with a delayed-store test holding replay for ~11 ms). But standalone microbenchmarks isolated an intrinsic **~23–29 µs WDDM submission-split tax per in-graph wait node**, measured five independent ways (device-mem, host-mapped-mem, batch-memop, and host-func variants, including under ~120-190 µs of real GPU work) — invariant across mechanism and NOT amortized or hidden by surrounding GPU work. In-fork confirmation: the full captured-region issue cost landed at ~28 µs = the ~5 µs replay of the 133 kernels **+** the ~23 µs wait-node tax. Whole-model: **−2.9 tok/s for BOTH gates**, indistinguishable from Spike 2's −3 tok/s — the tax merely *moved* from "un-captured merge" to "captured wait node," landing in the same ~30 µs class either way.
+
+### Root cause (stated plainly)
+
+Three independent mechanisms — the un-captured merge split, the captured stream-mem-op gate, and the captured host-callback gate — converge on the same ~30 µs-class penalty and the same **−3 tok/s** whole-model result. This is strong evidence the wall is a **platform property, not an implementation defect**: on this Windows/WDDM/Blackwell stack, a stream semaphore wait (mem-op or host-callback) cannot be batched with surrounding kernels — the driver must flush and submit in three pieces (before-wait, the wait, after-wait) instead of one, costing ~20–35 µs per graph launch, and because the wait is a hard stream barrier this cost does not overlap with the real GPU work it sits next to. The ~96 µs/layer overlap saving that Spike 1 proved was real and cheap to construct is, on Windows, always cancelled by a WDDM tax of the same order.
+
+### The Linux hypothesis (explicitly untested)
+
+On Linux (no WDDM), the captured stream-mem-op wait is architecturally expected to be ~sub-µs — the driver does not need to split a hardware-queue submission around a semaphore wait the way WDDM does. If that holds, the capture-preserving gate (proven capture-preserving and exactness-perfect in Spike 2b) would plausibly deliver close to the modeled ~100–104 tok/s target, since the only measured blocker was the WDDM submission-split tax, not the algorithm. **This is a hypothesis, not a finding** — it was not tested this pass. Note that a Windows-hosted Linux compatibility layer would **not** substitute for a real test: its CUDA path still crosses the host's WDDM driver for GPU submission, so the same tax is expected to reproduce there. A valid test requires a native Linux boot with the NVIDIA Linux driver.
+
+### What survives
+
+- **The executor design** (a bespoke single-graph split executor, dependency-order issue, persistent pinned worker) — proven mechanically correct and exactness-preserving across all three spikes.
+- **The byte-identity harness** — reused unchanged across all three spikes, zero methodology debt.
+- **The CPU-core-pinning result** — pinning the cold-worker pool away from the busy-polling issuing thread fully isolates it from contention; this result stands independent of V3's fate.
+- The implementation branch is preserved (not merged) for a future native-Linux retest without re-deriving any of the mechanism.
+
+### The honest bottom line
+
+On this Windows machine, the decode ceiling of the hot/cold split stands at **~91–92 tok/s**. V3 does not move that ceiling. The remaining levers, in order of plausibility, are **node-fusion** (an unexplored ~5%-class route — reducing the merge region's kernel count rather than trying to overlap around it) or a **platform change** (native Linux, where the WDDM wait-node tax isolated here would not apply). Both are future work, not committed programs.

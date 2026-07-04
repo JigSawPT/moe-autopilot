@@ -84,6 +84,17 @@ build 9875):
 | baseline 3-split-per-layer structure | `sched_debug_split.txt` |
 | full waves-4–6 narrative | `NOTES.md` |
 
+**V3 overlap spikes** (bespoke fork/join executor, investigated end-to-end and closed as
+a measured negative on Windows — full writeup in
+[docs/15_v3_overlap_design.md](docs/15_v3_overlap_design.md); files available on
+request):
+
+| Claim | Evidence file |
+|---|---|
+| bare fork/join glue ~11 µs/layer, 3.1–9× under kill bar, confirms earlier tax was a scheduler artifact | `spike1_forkjoin.md` |
+| single-layer overlap mechanism byte-identical and real, but breaks CUDA-graph capture on the merge region → −3 tok/s whole-model | `spike2_singlelayer.md` |
+| two independent capture-preserving wait gates both hit an intrinsic ~23-29 µs WDDM submission-split tax → −2.9 tok/s both gates, same root cause as spike 2 | `spike2b_capturegate.md` |
+
 ## Quality
 
 At temperature 0 the split output is a correct, semantically-equivalent NIF validator
