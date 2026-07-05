@@ -256,6 +256,10 @@ The Python `autopilot/` tooling wraps the profiler and computes coverage — see
 512-expert models; 48 for 256-expert). Full reproduction with exact evidence file
 mappings is in [README_REPRO.md](README_REPRO.md).
 
+> **CLI flags available:** on the [`aipc-hardening`](https://github.com/JigSawPT/llama.cpp/tree/aipc-hardening)
+> branch, `--moe-hot-list PATH` / `--moe-hot-n N` work as direct CLI flags in place of
+> steps 2a/2b's env vars above (the env vars still work everywhere, as a fallback).
+
 **Two machine-state rules that matter (measured, not folklore):**
 - **`--no-mmap` is mandatory** in measurements — a cold NVMe cache drops throughput ~5×.
 - **`--poll 100` everywhere** — the default poll=50 costs 8–14% and drifts with machine
@@ -350,21 +354,33 @@ alone, and it is the design that the V3 roadmap item picks up (see below).
 - **Hot-list swap requires a server restart** — no dynamic re-upload yet.
 - Active expert LoRAs disable the split (consistency).
 - Hot-lists are **model-specific** and **workload-dependent**.
-- **CUDA-tested only.** The split composes existing ggml ops
-  (`get_rows`/`cast`/`mul`/`add`/`mul_mat_id`) and should run on CPU, but it has only
-  been measured on CUDA, and the unique-id invariant it relies on is a CUDA
-  `mul_mat_id` property; the CPU path needs validation.
+- **CUDA-only in practice, despite a CPU-exact op composition.** The split's op
+  composition is CPU-exact (verified by the equality test above: `test-moe-hot-split`
+  asserts split output equals stock output at temperature 0, rel_l2 ~3e-8 on CPU) — but
+  the split is CUDA-only in practice, because the cold chain clamps cold expert ids to
+  0, producing duplicate per-token ids that the CUDA `mul_mat_id` kernel requires to be
+  unique. It runs correctly only in the intended layout (cold experts on CPU/RAM, hot
+  experts on CUDA, kept unique there by the dummy slots described above). CPU-only or
+  Vulkan support would need per-position-unique cold ids — a documented follow-up on the
+  [`aipc-hardening`](https://github.com/JigSawPT/llama.cpp/tree/aipc-hardening) branch.
 
 ---
 
 ## Roadmap / planned work
 
-- **CLI flags instead of env vars.** `AIPC_MOE_HOT_LIST` / `AIPC_MOE_HOT_N` should
-  become proper `common_params` flags (e.g. `--moe-hot-list PATH`, `--moe-hot-n N`) with
-  `arg.cpp` wiring. Env vars were the fastest way to measure the idea.
-- **CPU-path validation + automated tests.** A targeted `test-backend-ops`-style
-  split-vs-baseline output-equality test at temp 0 on a tiny MoE; validation of the
-  merge/id-clamp logic on the CPU backend.
+**Done (`aipc-hardening` branch, [JigSawPT/llama.cpp@aipc-hardening](https://github.com/JigSawPT/llama.cpp/tree/aipc-hardening)):**
+
+- **CLI flags instead of env vars.** `--moe-hot-list PATH` / `--moe-hot-n N` are now
+  proper `common_params` flags with `arg.cpp` wiring, alongside `AIPC_MOE_HOT_LIST` /
+  `AIPC_MOE_HOT_N`, which are kept as a fallback (flags take precedence when both are
+  set).
+- **CPU-path validation + automated tests.** An automated `test-moe-hot-split` (wired
+  into `ctest`) asserts split output equals stock output at temperature 0 (rel_l2 ~3e-8
+  on CPU) — see the Limitations section below for the precise scope of what this test
+  does and does not establish about running the split on CPU in practice.
+
+**Still planned:**
+
 - **Prefill-aware hot-copy management.** The resident hot copies cost ~10% prefill
   throughput at HOT_N=96 (measured, cause isolated — see the prefill section). Planned
   work: sweep `HOT_N` ∈ {48, 96, 192} to quantify how the penalty scales with resident
