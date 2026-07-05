@@ -177,6 +177,63 @@ A/B means): chat 500+300 → split wins −183.3 ms; agent-loop 4000+100 → spl
 +72.5 ms; long-context 16000+300 → split loses +356.9 ms. **Break-even at
 prompt:output ≈ 2.3.**
 
+## 9. gpt-oss-120b reproduction (SWIGLU_OAI extension)
+
+The base V2 split (sections 0-8 above) only covers the plain gated-SwiGLU MoE family
+(Coder-Next). gpt-oss uses a different activation — a clamped gated-SiLU with a
+per-expert bias (`SWIGLU_OAI`) — which the base split rejected and silently fell back
+to the stock path for. The **`aipc-swiglu-oai`** branch (built off the published
+`aipc-v2-pr` @ `ab2fbb7a6`) extends the dual hot/cold chain to also cover this family.
+Full write-ups, correctness verification, and the config sweep are in
+[`evidence/gpt-oss/`](evidence/gpt-oss/) (see its [README.md](evidence/gpt-oss/README.md)
+for an index mapping each headline number to its file).
+
+### Build
+
+Same recipe as section 0, on the `aipc-swiglu-oai` branch instead of `aipc-v2-pr`:
+
+```bash
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -T cuda=13.0 \
+  -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=120 -DLLAMA_CURL=OFF
+cmake --build build --config Release \
+  --target llama-bench llama-server llama-aipc-moe-profile -j 16
+```
+
+### Build a hot-list for gpt-oss (same tool as section 2, generic path)
+
+```bash
+llama-aipc-moe-profile -m gpt-oss-120b-mxfp4-00001-of-00003.gguf \
+  -f <your-representative-text.txt> -ngl 999 --n-cpu-moe <N>
+mv aipc_moe_profile.hotlist gptoss.hotlist
+```
+
+`<N>` (the `--n-cpu-moe` CPU-offload depth) is also the value to pass to `--n-cpu-moe`
+in the bench/server commands below — the two must match, since the hot-list is built
+against a specific set of CPU-resident (offload-eligible) layers.
+
+### Headline command (llama-bench, the instrument used for every gpt-oss tok/s number)
+
+```bash
+# OFF (no cache — stock SWIGLU_OAI path)
+llama-bench -m gpt-oss-120b-mxfp4-00001-of-00003.gguf \
+  -ngl 999 -ncmoe <N> -b 4096 -ub 4096 -mmp 0 -t 16 -p 0 -n 128 -r 3 -fa 1 -o json
+
+# ON (cache active)
+# PowerShell: $env:AIPC_MOE_HOT_LIST="<path-to>/gptoss.hotlist"; $env:AIPC_MOE_HOT_N="<H>"
+# bash:       AIPC_MOE_HOT_LIST=<path-to>/gptoss.hotlist AIPC_MOE_HOT_N=<H>
+llama-bench -m gpt-oss-120b-mxfp4-00001-of-00003.gguf \
+  -ngl 999 -ncmoe <N> -b 4096 -ub 4096 -mmp 0 -t 16 -p 0 -n 128 -r 3 -fa 1 -o json
+```
+
+Load-time stderr must show `AIPC split: … experts/layer, bias=yes, … MiB of VRAM` on
+the ON arm to confirm the SWIGLU_OAI split is active (`bias=yes` — the tell that
+distinguishes it from the plain-SwiGLU `bias=no` split in section 1). The best
+(`<N>`, `<H>`) pairs measured on a 32 GB card: `ncmoe25/HOT_N22` (highest absolute
+tok/s) and `ncmoe30/HOT_N42` (highest relative gain) — see
+[`evidence/gpt-oss/gptoss_maxabs.md`](evidence/gpt-oss/gptoss_maxabs.md) and
+[`evidence/gpt-oss/gptoss_sweep.md`](evidence/gpt-oss/gptoss_sweep.md) for the full
+grid and the VRAM-budget math to pick `<H>` on other cards.
+
 ## Consistency note
 
 Every number in the README and in this file is taken from `evidence/v2/MANIFEST.md`
@@ -184,4 +241,7 @@ Every number in the README and in this file is taken from `evidence/v2/MANIFEST.
 dated addendum, with the full write-up in `prefill_ab.md`). Where a raw A/B value
 (e.g. 85.8/86.2 for the non-circular session row) differs from a headline band
 (90.5–91.5), both are stated and the difference is attributed to the documented
-VRAM-baseline machine-state effect — the MANIFEST wins and reports both.
+VRAM-baseline machine-state effect — the MANIFEST wins and reports both. The gpt-oss
+numbers in section 9 and `evidence/gpt-oss/` are a separate, later evidence trail
+(the SWIGLU_OAI extension) and are sourced from their own files rather than the V2
+MANIFEST — each gpt-oss file documents its own method/hygiene inline.

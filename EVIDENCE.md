@@ -102,6 +102,24 @@ At temperature 0 the split output is a correct, semantically-equivalent NIF vali
 regression is within noise. Small stylistic divergence is the expected consequence of a
 slightly different floating-point path.
 
+## gpt-oss-120b (SWIGLU_OAI extension)
+
+The gpt-oss-120b support is a separate, later evidence trail — the `aipc-swiglu-oai`
+branch extends the split to gpt-oss's clamped-gated-SiLU-with-bias activation family,
+which the base V2 split (above) does not cover. Full raw write-ups (not summarized) are
+under [`evidence/gpt-oss/`](evidence/gpt-oss/); see its own
+[README.md](evidence/gpt-oss/README.md) for a headline-number-to-file index. Commands are
+in [README_REPRO.md §9](README_REPRO.md#9-gpt-oss-120b-reproduction-swiglu_oai-extension).
+
+| File | What it documents |
+|---|---|
+| `evidence/gpt-oss/swiglu_oai.md` | Main write-up: implementation diff, correctness verdicts (byte-identity for Coder-Next, numerical-equivalence for gpt-oss), VRAM budget math, first (provisional) speed number |
+| `evidence/gpt-oss/swiglu_oai_review.md` | 3-reviewer adversarial review synthesis (no BLOCKER/HIGH; one open empirical question) |
+| `evidence/gpt-oss/swiglu_oai_verify.md` | 6-check verification settling the review's open question + clean idle speed re-measure (+24.8%) |
+| `evidence/gpt-oss/gptoss_sweep.md` | ncmoe × HOT_N config sweep; every cell beats +26%; best relative gain +39.9% |
+| `evidence/gpt-oss/gptoss_maxabs.md` | Highest honest absolute decode tok/s (47.61, +31.6%) + adaptive/session-hot-list lever |
+| `evidence/gpt-oss/prefill_ab.md` | Separate finding: resident hot-copy VRAM measurably regresses **prefill** (−9.9%) even though the split is decode-only; 3-arm A/B isolates the mechanism |
+
 ## Notes on what is (and is not) in this public bundle
 
 - The raw `*.json` captures are machine- and workload-specific traces. They are offered
