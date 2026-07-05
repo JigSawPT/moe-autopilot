@@ -1,4 +1,4 @@
-# hot-experts — an adaptive hot/cold MoE expert split for llama.cpp
+# moe-autopilot — an adaptive hot/cold MoE expert split for llama.cpp
 
 **A load-time hot/cold expert split on top of `--n-cpu-moe` that gives a repeatable
 +26% decode band on consumer hardware, using per-session adaptive hot-lists and a
@@ -67,6 +67,35 @@ Coverage = fraction of a live task's expert hits covered by the hot-list at top-
 The smaller relative gain on the faster model is consistent with a fixed per-layer
 dispatch floor (~1–3 ms/token) of the cold chain that dominates once the cold byte
 count shrinks.
+
+**Third model — gpt-oss-120B (SWIGLU_OAI; 117B/5.1B-active, 128 experts, MXFP4).**
+gpt-oss uses a clamped gated-SiLU with per-expert bias (`SWIGLU_OAI`), which the base
+split fell back on. The [`aipc-swiglu-oai`](https://github.com/JigSawPT/llama.cpp/tree/aipc-swiglu-oai)
+branch threads the three per-expert biases through the hot and cold chains (dummy hot
+slots zeroed so the masked merge stays finite), so the cache now applies. `llama-bench`
+tg128, corpus (non-circular) hot-list, temperature 0:
+
+| Config | coverage | decode tok/s | vs baseline |
+|---|---|---|---|
+| baseline `--n-cpu-moe 25` | — | 36.2 | — |
+| **split, HOT_N=22** | 63.4% | **47.6** | **+31.6%** |
+
+- VRAM peak 29.6 GB (< 30 GB). The *relative* gain compounds with offload depth — +27% at
+  `--n-cpu-moe 26`/HOT_N24, up to +40% at `--n-cpu-moe 30`/HOT_N42 — but the *absolute*
+  throughput peaks at an interior `--n-cpu-moe 25` (faster baseline than 26, more VRAM room
+  than 24). **A bigger % is not faster:** the +40% config ends at 42.8 tok/s, below the 47.6
+  here. Realistic single-user serving (`llama-server`, real KV/context, `-ub 512` to fit
+  ≤ 30 GB) is **~41 tok/s** — the ~13% gap to the bench figure is instrument, not mixed in.
+- **Honest finding — coverage does not always translate.** An adaptive per-session hot-list
+  nearly *doubled* held-out coverage (28% → 45%, replicating the Coder-Next generic→session
+  jump) but bought only **+2.3% tok/s** over the corpus list: gpt-oss routing is *flat*, so
+  the extra covered experts are low-traffic tail. Where a model concentrates its routing
+  (Coder-Next) the adaptive lever pays; where it is flat (gpt-oss) it does not. Absolute
+  throughput here is **VRAM-bound** (pinned at the 30 GB WDDM cliff); the adaptive gain is
+  **routing-flatness-bound**. Correctness note: the stock gpt-oss CUDA/MXFP4 path is itself
+  run-to-run non-deterministic, so byte-identity is undefined; the split is numerically
+  equivalent within that noise floor, and the +0.002 logprob mean-shift was proven benign
+  floating-point reassociation by a single-layer CPU tensor diff.
 
 **Zero overhead when disabled** — a build with the code present but the env vars unset
 produces byte-for-byte the original graph. Verified on the 35B-A3B with all experts in
@@ -175,8 +204,9 @@ so the hot bytes are **not** re-read from RAM. Any unsupported shape returns `nu
 and the stock batched path runs untouched.
 
 **Gating conditions (all must hold, else fall back):** decode / small batch only
-(`n_tokens ≤ 8`); gated SwiGLU with no per-expert bias/scale (`SWIGLU_OAI` / gpt-oss
-fall back); no active expert LoRAs; a split registered for up/gate/down.
+(`n_tokens ≤ 8`); either plain gated SwiGLU with no bias, OR `SWIGLU_OAI` with per-expert
+bias (gpt-oss, on the `aipc-swiglu-oai` branch); no per-expert scales; no active expert
+LoRAs; a split registered for up/gate/down.
 
 ---
 
@@ -312,9 +342,9 @@ alone, and it is the design that the V3 roadmap item picks up (see below).
   the measured **~10% prefill throughput cost** of the resident hot copies above. The
   split is a net end-to-end win only when generated tokens dominate the prompt
   (break-even ≈ prompt:output 2.3 on this config).
-- **Gated-SwiGLU only**, no per-expert bias/scale — `SWIGLU_OAI` / gpt-oss fall back
-  silently. Extending the chain to those shapes is small and is the prerequisite for a
-  second supported model family.
+- **Two activation families supported:** plain gated-SwiGLU (Coder-Next) and `SWIGLU_OAI`
+  with per-expert bias (gpt-oss, on the [`aipc-swiglu-oai`](https://github.com/JigSawPT/llama.cpp/tree/aipc-swiglu-oai)
+  branch). Per-expert *scales* still fall back to the stock path.
 - **One model per process** (global registry, mutex + clear on load); concurrent
   multi-model in a single process is out of scope.
 - **Hot-list swap requires a server restart** — no dynamic re-upload yet.
