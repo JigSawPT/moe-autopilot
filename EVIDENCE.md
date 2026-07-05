@@ -120,6 +120,42 @@ in [README_REPRO.md §9](README_REPRO.md#9-gpt-oss-120b-reproduction-swiglu_oai-
 | `evidence/gpt-oss/gptoss_maxabs.md` | Highest honest absolute decode tok/s (47.61, +31.6%) + adaptive/session-hot-list lever |
 | `evidence/gpt-oss/prefill_ab.md` | Separate finding: resident hot-copy VRAM measurably regresses **prefill** (−9.9%) even though the split is decode-only; 3-arm A/B isolates the mechanism |
 
+## evidence/gate/ — DeltaMoE failure-set gate (frozen research program)
+
+A separate, later evidence trail, unrelated to the MoE expert-cache mechanism above:
+the raw methodology and hard-set data backing the "27B vs a frontier model" write-up.
+**Honest framing:** DeltaMoE set out to distill small LoRA adapters from a frontier
+teacher into a clean dense 27B student on domains where the student demonstrably
+underperforms. Across five candidate domains, a failure-set gate (student fails a hard,
+machine-checked prompt set at temperature 0; a frontier teacher must then pass most of
+those specific failures) found **exactly two domains viable at the gate — pt-clinico and
+codigo-pt** — while raciocinio, compras-online, and docs-longos were not. The program is
+a **frozen research program**: the gate methodology is validated end-to-end (including a
+nano MTP×LoRA training-pipeline smoke test, which passed), but the next step — bulk
+teacher-generation and full QLoRA training for the two viable domains — was paused by
+user decision, not a negative result. See
+[`evidence/gate/README.md`](evidence/gate/README.md) for the full index and honest
+framing, and [`evidence/gate/13_deltamoe_runbook.md`](evidence/gate/13_deltamoe_runbook.md)
+for the executable runbook with every gate-stage outcome table.
+
+| File | What it is |
+|---|---|
+| `13_deltamoe_runbook.md` | The executable runbook (F3.0–F3.D): cheap rubric gate, rubric-saturation diagnosis, failure-set gate design + per-domain viability table, nano MTP×LoRA training-pipeline gate (PASS) |
+| `hardset_codigo.jsonl`, `hardset_codigo_ext.jsonl` | codigo-pt hard-sets (80 items total) — the combined domain that cleared the gate (15/80 teacher-confirmed failures) |
+| `hardset_clinico.jsonl` | pt-clinico hard-set (40 items) — cleared the gate (9/40 teacher-confirmed failures) |
+| `hardset_raciocinio.jsonl` | reasoning hard-set (40 items) — **not viable** (6/40, below threshold) |
+| `hardset_compras.jsonl` | shopping-math hard-set (40 items) — **not viable** (0/40) |
+| `hardset_docslongos.jsonl` | long-document hard-set (40 items) — **not viable** (2/40) |
+| `hardset_score.py` | the deterministic domain-agnostic scorer used for every hard-set and the teacher pass |
+| `cheapgate2_summary.md` | the rubric-gate rerun with a frontier teacher pool; motivated abandoning the rubric-delta gate for the failure-set gate |
+| `hardset_phase2_summary.md`, `hardset_phase2b_summary.md` | the failure-set gate's student passes across all five domains, with audited check-authoring fixes |
+| `cheapgate_raciocinio_regen.md` | a narrow correction task confirming 4 apparent reasoning failures were a generation-budget artifact, not genuine misses |
+
+Deliberately not included: the raw teacher/student/judge answer JSONLs and server/training
+logs (large, mechanical, and already fully quoted in the summaries above), the earlier
+pivot-rationale design doc, and the F3.B.0 training-pipeline gate's raw evidence beyond its
+one-paragraph outcome — see `evidence/gate/README.md` for the full "what's not here" list.
+
 ## Notes on what is (and is not) in this public bundle
 
 - The raw `*.json` captures are machine- and workload-specific traces. They are offered
