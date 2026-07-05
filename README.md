@@ -70,10 +70,11 @@ count shrinks.
 
 **Third model — gpt-oss-120B (SWIGLU_OAI; 117B/5.1B-active, 128 experts, MXFP4).**
 gpt-oss uses a clamped gated-SiLU with per-expert bias (`SWIGLU_OAI`), which the base
-split fell back on. The [`aipc-swiglu-oai`](https://github.com/JigSawPT/llama.cpp/tree/aipc-swiglu-oai)
-branch threads the three per-expert biases through the hot and cold chains (dummy hot
-slots zeroed so the masked merge stays finite), so the cache now applies. `llama-bench`
-tg128, corpus (non-circular) hot-list, temperature 0:
+split fell back on. Support was extended to `SWIGLU_OAI` on the `aipc-swiglu-oai`
+branch (now folded into [`aipc-hardening`](https://github.com/JigSawPT/llama.cpp/tree/aipc-hardening),
+the branch to use) — it threads the three per-expert biases through the hot and cold
+chains (dummy hot slots zeroed so the masked merge stays finite), so the cache now
+applies. `llama-bench` tg128, corpus (non-circular) hot-list, temperature 0:
 
 | Config | coverage | decode tok/s | vs baseline |
 |---|---|---|---|
@@ -205,12 +206,14 @@ and the stock batched path runs untouched.
 
 **Gating conditions (all must hold, else fall back):** decode / small batch only
 (`n_tokens ≤ 8`); either plain gated SwiGLU with no bias, OR `SWIGLU_OAI` with per-expert
-bias (gpt-oss, on the `aipc-swiglu-oai` branch); no per-expert scales; no active expert
+bias (gpt-oss, on the `aipc-hardening` branch); no per-expert scales; no active expert
 LoRAs; a split registered for up/gate/down.
 
 ---
 
 ## Quickstart
+
+> **Which branch to use:** [`aipc-hardening`](https://github.com/JigSawPT/llama.cpp/tree/aipc-hardening) — it has the cache for **both** plain gated-SwiGLU (Qwen3-Coder-Next, Qwen3.6-35B) **and** the `SWIGLU_OAI` variant (gpt-oss-120B), plus the `--moe-hot-list` / `--moe-hot-n` CLI flags and the split-vs-baseline equality test. `aipc-swiglu-oai` and `aipc-v2-pr` are earlier incremental checkpoints, kept for history.
 
 You need a CUDA build of the patched fork. The measured numbers used a Blackwell
 (sm_120) build on Windows; a generic Linux/CUDA recipe is also given.
@@ -347,8 +350,9 @@ alone, and it is the design that the V3 roadmap item picks up (see below).
   split is a net end-to-end win only when generated tokens dominate the prompt
   (break-even ≈ prompt:output 2.3 on this config).
 - **Two activation families supported:** plain gated-SwiGLU (Coder-Next) and `SWIGLU_OAI`
-  with per-expert bias (gpt-oss, on the [`aipc-swiglu-oai`](https://github.com/JigSawPT/llama.cpp/tree/aipc-swiglu-oai)
-  branch). Per-expert *scales* still fall back to the stock path.
+  with per-expert bias (gpt-oss, extended on `aipc-swiglu-oai`, now in
+  [`aipc-hardening`](https://github.com/JigSawPT/llama.cpp/tree/aipc-hardening)).
+  Per-expert *scales* still fall back to the stock path.
 - **One model per process** (global registry, mutex + clear on load); concurrent
   multi-model in a single process is out of scope.
 - **Hot-list swap requires a server restart** — no dynamic re-upload yet.
